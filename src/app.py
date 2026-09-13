@@ -19,11 +19,39 @@ import tab_audit
 import tab_scaling_curve
 import updater
 import ffmpeg_setup
+import tab_version
+import version_info
+from __version__ import __version__
 
 from config_manager import load_config, save_config
 
 os.makedirs("downloads", exist_ok=True)
 cfg = load_config()
+
+# ==========================================
+# 全域錯誤回報輔助:未預期例外的訊息自動附上版本號+commit hash,
+# 讓組員截圖回報時能一眼看出他跑的是哪一版。
+#
+# Gradio 6 的事件例外最終會經過 gradio.queueing.error_payload() 轉成
+# 要送給前端的內容(gradio/queueing.py 是用 `from gradio.utils import
+# error_payload` 綁定的,所以要 patch queueing 模組自己的名稱,patch
+# gradio.utils.error_payload 沒有用)。這裡包一層,原本的行為完全不動,
+# 只是在 content["error"] 有值時多附加版本資訊。如果之後 Gradio 版本
+# 把這個內部函式改掉了,這裡會安靜地放棄增強、不影響程式正常啟動。
+# ==========================================
+try:
+    import gradio.queueing as _gr_queueing
+    _original_error_payload = _gr_queueing.error_payload
+
+    def _versioned_error_payload(error, show_error):
+        content = _original_error_payload(error, show_error)
+        if content.get("error"):
+            content["error"] = f"{content['error']}\n\n[{version_info.get_version_string()}]"
+        return content
+
+    _gr_queueing.error_payload = _versioned_error_payload
+except Exception as e:
+    print(f"[System] 警告:無法掛上版本化錯誤訊息 ({e}),不影響程式正常運作。")
 
 # ==========================================
 # 系統啟動前置作業：自動清理 Gradio 幽靈快取
@@ -49,6 +77,7 @@ clear_gradio_cache()
 # 修正點：Gradio 6.0 規定這裡必須保持乾淨，不能放 theme
 with gr.Blocks() as demo:
     gr.Markdown("#AI 數據工作站")
+    gr.Markdown(f"`{version_info.get_version_string()}`")
     # 全站通用:讓所有 Gallery 開啟預覽後,底部縮圖列可以捲軸拖曳/滾輪/按住拖曳
     gr.HTML(gallery_scroll.GALLERY_SCROLL_CSS)
 
@@ -65,7 +94,10 @@ with gr.Blocks() as demo:
         r = updater.check_for_update()
         if r["status"] == "update_available":
             commits = r.get("commits", "")
-            return gr.update(visible=True), f"**發現新版本！**\n\n{commits}", ""
+            local_v = r.get("local_version", "?")
+            remote_v = r.get("remote_version", "?")
+            msg = f"**發現新版本！** 目前 v{local_v} → 最新 v{remote_v}\n\n{commits}"
+            return gr.update(visible=True), msg, ""
         return gr.update(visible=False), "", ""
 
     def _do_update_click():
@@ -175,6 +207,10 @@ with gr.Blocks() as demo:
                 with gr.TabItem("Data Scaling Curve"):
                     tab_scaling_curve.render_ui()
 
+        with gr.Tab("版本管理"):
+            _version_load_fn, _version_load_outputs = tab_version.render_ui()
+            demo.load(fn=_version_load_fn, inputs=None, outputs=_version_load_outputs)
+
 def pick_free_port():
     """挑一個真的綁得上的埠。
     Windows 裝了 Hyper-V/WSL/Docker 後會「保留」一大段埠（含 Gradio 預設的
@@ -199,4 +235,5 @@ if __name__ =="__main__":
     demo.launch(
         inbrowser=True, server_name="127.0.0.1", server_port=port,
         head=tab_extractor.FILMSTRIP_HEAD_JS + gallery_scroll.GALLERY_SCROLL_HEAD_JS,
+        show_error=True,  # 未預期例外要把訊息(含版本資訊,見上面的 monkeypatch)顯示給使用者
     )
