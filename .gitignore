@@ -25,3 +25,7 @@ config.local.json
 /src/ffmpeg.exe
 /src/ffplay.exe
 /src/ffprobe.exe
+
+# ffmpeg/ffprobe 改成啟動時自動偵測/下載(見 src/ffmpeg_setup.py),
+# 執行檔本身(~290MB)不再進版控。
+bin/*.exe

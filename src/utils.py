@@ -73,24 +73,23 @@ def get_yolo_model(path):
 
 # ==========================================================
 # FFmpeg / FFprobe 定位
-# exe 同時存在於 ../bin/ 與本資料夾,優先用 ../bin/,
-# 再退而求其次找本資料夾,最後 fallback 到系統 PATH。
+# 優先序:系統 PATH → 專案 bin/(找不到就自動下載,見 ffmpeg_setup.py)。
+# 這兩個函式本身只做單純查找、不下載、不拋例外——真正的「找不到就自動
+# 下載」在程式啟動時由 ffmpeg_setup.ensure_ffmpeg() 處理一次,這裡找不到
+# 就回傳裸命令名稱交給系統 PATH 做最後嘗試,跟呼叫端既有的 subprocess
+# 例外處理相容(找不到執行檔會在 subprocess 呼叫當下自然噴錯,而不是在
+# 這裡就把整條呼叫鏈炸掉)。
 # ==========================================================
-def _resolve_exe(exe_name):
-    here = os.path.dirname(os.path.abspath(__file__))
-    for cand in (os.path.join(here,"..","bin", exe_name),
-                 os.path.join(here, exe_name)):
-        if os.path.exists(cand):
-            return cand
-    return exe_name.replace(".exe","") # 交給系統 PATH
-
-
 def ffmpeg_path():
-    return _resolve_exe("ffmpeg.exe")
+    from ffmpeg_setup import find_ffmpeg
+    ffmpeg, _ = find_ffmpeg()
+    return ffmpeg or "ffmpeg"
 
 
 def ffprobe_path():
-    return _resolve_exe("ffprobe.exe")
+    from ffmpeg_setup import find_ffmpeg
+    _, ffprobe = find_ffmpeg()
+    return ffprobe or "ffprobe"
 
 
 # ==========================================================

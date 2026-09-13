@@ -18,6 +18,7 @@ import tab_consensus
 import tab_audit
 import tab_scaling_curve
 import updater
+import ffmpeg_setup
 
 from config_manager import load_config, save_config
 
@@ -74,6 +75,25 @@ with gr.Blocks() as demo:
     demo.load(fn=_check_update_on_load, inputs=None,
               outputs=[update_banner, update_msg, update_status])
     update_btn.click(fn=_do_update_click, inputs=None, outputs=[update_status])
+
+    # ==========================================
+    # ffmpeg 自動偵測/下載:一樣用 demo.load,不卡住主要功能的初始渲染。
+    # 找得到(系統 PATH 或 bin/)就完全不顯示東西;找不到才觸發下載,
+    # 下載中會有進度顯示;失敗只顯示警告訊息,不會讓程式打不開。
+    # ==========================================
+    ffmpeg_status = gr.Markdown()
+
+    def _ensure_ffmpeg_on_load(progress=gr.Progress()):
+        ffmpeg, ffprobe = ffmpeg_setup.find_ffmpeg()
+        if ffmpeg and ffprobe:
+            return ""
+        try:
+            ffmpeg_setup.download_ffmpeg(progress_cb=progress)
+            return "✅ ffmpeg 已自動下載完成,影片相關功能可以使用了。"
+        except Exception as e:
+            return f"⚠️ {e}"
+
+    demo.load(fn=_ensure_ffmpeg_on_load, inputs=None, outputs=[ffmpeg_status])
 
     with gr.Accordion("Roboflow API 設定", open=False):
             with gr.Row():
