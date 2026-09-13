@@ -2,9 +2,10 @@
 
 格式參考 [Keep a Changelog](https://keepachangelog.com/),分類:Added / Changed / Fixed / Removed。
 
-## [0.1.0] - 2026-09-14
+## [1.0.0] - 2026-09-14
 
-第一個掛版本號的版本,把目前已知的既有異動一併補進來。
+第一個掛版本號的版本,把目前已知的既有異動一併補進來。版本號從 1.0.0 起算,
+對齊先前已經發布的 GitHub Release tag `v1.0.0`。
 
 ### Added
 - VLM 自動標註模組(OpenAI Vision API),沿用既有 `_HARD` 人工複核慣例輸出 YOLO txt + XML。
