@@ -1,0 +1,16 @@
+ultralytics
+gradio
+diffusers
+transformers
+accelerate
+openai
+google-genai
+yt-dlp
+opencv-python
+numpy
+roboflow
+plyer
+pandas
+matplotlib
+PySide6
+pyinstaller

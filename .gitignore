@@ -1,0 +1,27 @@
+.env
+*.key
+*.pt
+runs/
+runs_distill/
+dataset*/
+all*/
+temp/
+__pycache__/
+venv/
+downloads/
+extracted_frames/
+generated_images/
+transfer_to_tab3/
+build/
+dist/
+*.log
+build_log*.txt
+*.rar
+*.zip
+config.local.json
+.claude/
+
+# ffmpeg 系列的正式位置只有 bin/,src/ 底下這幾個是舊的重複備份檔,不進版控
+/src/ffmpeg.exe
+/src/ffplay.exe
+/src/ffprobe.exe
