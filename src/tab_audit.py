@@ -6,6 +6,7 @@ import cv2
 import gradio as gr
 
 import audit_core as ac
+import audit_excel_export as aee
 from vlm_annotate_core import CLASS_NAME_TO_ID
 
 TEMP_DIR = os.path.join(os.getcwd(), "temp", "audit")
@@ -16,7 +17,7 @@ def run_audit(folder, area_max, area_min, progress=gr.Progress()):
     if not folder or not os.path.isdir(folder):
         empty = gr.update(value=[])
         return ("找不到資料夾,請確認路徑正確。", empty, empty, None, None,
-                [], [])
+                [], [], None)
 
     result = ac.audit_dataset(folder, area_max_pct=area_max, area_min_pct=area_min,
                               progress=progress)
@@ -27,8 +28,8 @@ def run_audit(folder, area_max, area_min, progress=gr.Progress()):
         for r in result["missing_labels"]
     ]
     anomaly_rows = [
-        [os.path.basename(img), line, reason]
-        for img, line, reason in result["anomaly_boxes"]
+        [os.path.basename(a["image"]), a["box_index"], a["detail"]]
+        for a in result["anomaly_boxes"]
     ]
 
     fig_counts, fig_areas = ac.build_stats_figures(
@@ -47,9 +48,10 @@ def run_audit(folder, area_max, area_min, progress=gr.Progress()):
             f"{os.path.basename(p)}: {e}" for p, e in result["failed"][:30])
 
     missing_paths = [r["image"] for r in result["missing_labels"]]
-    anomaly_paths = [img for img, _line, _reason in result["anomaly_boxes"]]
+    anomaly_paths = [a["image"] for a in result["anomaly_boxes"]]
 
-    return summary, missing_rows, anomaly_rows, fig_counts, fig_areas, missing_paths, anomaly_paths
+    return (summary, missing_rows, anomaly_rows, fig_counts, fig_areas,
+             missing_paths, anomaly_paths, result)
 
 
 def export_missing(missing_paths):
@@ -68,6 +70,14 @@ def export_anomaly(anomaly_paths):
     return out_path
 
 
+def export_excel(result):
+    if not result:
+        return None
+    out_path = os.path.join(TEMP_DIR, f"audit_{time.strftime('%Y%m%d_%H%M%S')}.xlsx")
+    aee.export_excel(result, out_path)
+    return out_path
+
+
 def run_sample(folder, cls_name, n):
     crops = ac.sample_class_crops(folder, cls_name, int(n))
     return [(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB), caption) for crop, caption in crops]
@@ -76,6 +86,7 @@ def run_sample(folder, cls_name, n):
 def render_ui():
     missing_paths_state = gr.State([])
     anomaly_paths_state = gr.State([])
+    audit_result_state = gr.State(None)
 
     gr.Markdown("## 標註品質稽核")
     gr.Markdown("找出標註錯誤和漏標,支援 images/+labels/ 標準版型或同資料夾同檔名版型。")
@@ -89,6 +100,8 @@ def render_ui():
     with gr.Tabs():
         with gr.TabItem("總覽"):
             summary_txt = gr.Textbox(label="稽核摘要", lines=8)
+            export_excel_btn = gr.Button("匯出 Excel", variant="primary")
+            export_excel_file = gr.File(label="下載 Excel 報表")
 
         with gr.TabItem("漏標清單"):
             missing_df = gr.Dataframe(
@@ -125,13 +138,15 @@ def render_ui():
         fn=run_audit,
         inputs=[folder_input, area_max_slider, area_min_slider],
         outputs=[summary_txt, missing_df, anomaly_df, counts_plot, areas_plot,
-                missing_paths_state, anomaly_paths_state],
+                missing_paths_state, anomaly_paths_state, audit_result_state],
     )
 
     export_missing_btn.click(fn=export_missing, inputs=[missing_paths_state],
                              outputs=[export_missing_file])
     export_anomaly_btn.click(fn=export_anomaly, inputs=[anomaly_paths_state],
                              outputs=[export_anomaly_file])
+    export_excel_btn.click(fn=export_excel, inputs=[audit_result_state],
+                           outputs=[export_excel_file])
 
     sample_btn.click(fn=run_sample, inputs=[folder_input, sample_cls_dd, sample_n_slider],
                      outputs=[sample_gallery])

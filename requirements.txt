@@ -12,5 +12,6 @@ roboflow
 plyer
 pandas
 matplotlib
+openpyxl
 PySide6
 pyinstaller

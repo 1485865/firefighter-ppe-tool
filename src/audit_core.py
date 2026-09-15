@@ -88,11 +88,24 @@ def _calc_iou_norm(b1, b2):
     return inter / max(1e-9, area_a + area_b - inter)
 
 
+# 異常原因分類,順序即 Excel 分組排序順序(標註格式錯誤這類額外情況排在最後)。
+ANOMALY_CATEGORIES = ["框過大", "框過小", "長寬比異常", "超出邊界", "重複框"]
+ANOMALY_CATEGORY_ORDER = {name: i for i, name in enumerate(ANOMALY_CATEGORIES)}
+
+
+def _anomaly_sort_key(a):
+    return (ANOMALY_CATEGORY_ORDER.get(a["category"], len(ANOMALY_CATEGORIES)),
+            -a["severity"])
+
+
 def audit_dataset(folder, area_max_pct=60.0, area_min_pct=0.1,
                    aspect_ratio_max=2.5, progress=None):
     """執行完整稽核,回傳 dict:
-      missing_labels: [(image, person, hands, heads, gap), ...] 依缺口排序
-      anomaly_boxes: [(image, line_no, reason), ...]
+      missing_labels: [{image, person, hands, expected_hands, hand_gap,
+                         heads, expected_heads, head_gap, gap}, ...] 依 gap 排序
+      anomaly_boxes: [{image, box_index, cls_name, category, detail,
+                        cx, cy, w, h, area_pct, aspect_ratio, severity}, ...]
+                      先依 category 分組,組內依 severity 由大到小排序
       class_counts: {class_name: count}
       class_areas: {class_name: [area_pct, ...]}
       per_image_counts: [instance_count, ...]
@@ -113,7 +126,12 @@ def audit_dataset(folder, area_max_pct=60.0, area_min_pct=0.1,
         try:
             boxes, parse_errors = parse_label(label_path)
             for err in parse_errors:
-                anomaly_boxes.append((img_path, "-", f"標註格式錯誤: {err}"))
+                anomaly_boxes.append({
+                    "image": img_path, "box_index": "-", "cls_name": None,
+                    "category": "標註格式錯誤", "detail": f"標註格式錯誤: {err}",
+                    "cx": None, "cy": None, "w": None, "h": None,
+                    "area_pct": None, "aspect_ratio": None, "severity": 0.0,
+                })
 
             person_count = sum(1 for b in boxes if b[0] == PERSON_ID)
             hand_count = sum(1 for b in boxes if b[0] in HAND_IDS)
@@ -127,7 +145,9 @@ def audit_dataset(folder, area_max_pct=60.0, area_min_pct=0.1,
                 missing_labels.append({
                     "image": img_path, "person": person_count,
                     "hands": hand_count, "expected_hands": expected_hands,
+                    "hand_gap": hand_gap,
                     "heads": head_count, "expected_heads": expected_heads,
+                    "head_gap": head_gap,
                     "gap": max(hand_gap, 0) + max(head_gap, 0),
                 })
 
@@ -138,31 +158,55 @@ def audit_dataset(folder, area_max_pct=60.0, area_min_pct=0.1,
                 class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
                 area_pct = bw * bh * 100.0
                 class_areas.setdefault(cls_name, []).append(area_pct)
+                ar = (bw / bh) if bh > 0 else 0.0
+
+                def _box(category, detail, severity):
+                    anomaly_boxes.append({
+                        "image": img_path, "box_index": idx, "cls_name": cls_name,
+                        "category": category, "detail": detail,
+                        "cx": cx, "cy": cy, "w": bw, "h": bh,
+                        "area_pct": area_pct, "aspect_ratio": ar,
+                        "severity": severity,
+                    })
 
                 if area_pct > area_max_pct:
-                    anomaly_boxes.append((img_path, idx, f"框過大({area_pct:.1f}% 畫面)"))
+                    _box("框過大", f"框過大({area_pct:.1f}% 畫面)", area_pct)
                 elif area_pct < area_min_pct:
-                    anomaly_boxes.append((img_path, idx, f"框過小({area_pct:.2f}% 畫面)"))
+                    _box("框過小", f"框過小({area_pct:.2f}% 畫面)",
+                         1.0 / max(area_pct, 1e-6))
 
                 if cls_id in HAND_CLASS_IDS and bh > 0:
-                    ar = bw / bh
                     if ar > aspect_ratio_max or ar < (1.0 / aspect_ratio_max):
-                        anomaly_boxes.append((img_path, idx, f"手套框長寬比異常(ratio={ar:.2f})"))
+                        _box("長寬比異常", f"手套框長寬比異常(ratio={ar:.2f})",
+                             max(ar, 1.0 / ar))
 
                 if cx - bw / 2 < 0 or cy - bh / 2 < 0 or cx + bw / 2 > 1 or cy + bh / 2 > 1:
-                    anomaly_boxes.append((img_path, idx, "框超出畫面邊界"))
+                    overflow = max(0.0, -(cx - bw / 2), 0.0, -(cy - bh / 2),
+                                   (cx + bw / 2) - 1.0, (cy + bh / 2) - 1.0)
+                    _box("超出邊界", "框超出畫面邊界", overflow)
 
             for a in range(len(boxes)):
                 for b in range(a + 1, len(boxes)):
                     if boxes[a][0] != boxes[b][0]:
                         continue
-                    if _calc_iou_norm(boxes[a][1:], boxes[b][1:]) > 0.95:
-                        anomaly_boxes.append(
-                            (img_path, f"{a+1}&{b+1}", "完全重疊的重複框"))
+                    iou = _calc_iou_norm(boxes[a][1:], boxes[b][1:])
+                    if iou > 0.95:
+                        cls_id, cx, cy, bw, bh = boxes[a]
+                        cls_name = ID_TO_CLASS.get(cls_id, f"未知類別({cls_id})")
+                        anomaly_boxes.append({
+                            "image": img_path, "box_index": f"{a+1}&{b+1}",
+                            "cls_name": cls_name, "category": "重複框",
+                            "detail": "完全重疊的重複框",
+                            "cx": cx, "cy": cy, "w": bw, "h": bh,
+                            "area_pct": bw * bh * 100.0,
+                            "aspect_ratio": (bw / bh) if bh > 0 else 0.0,
+                            "severity": iou,
+                        })
         except Exception as e:
             failed.append((img_path, str(e)))
 
     missing_labels.sort(key=lambda r: r["gap"], reverse=True)
+    anomaly_boxes.sort(key=_anomaly_sort_key)
 
     return {
         "missing_labels": missing_labels,
