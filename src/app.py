@@ -23,7 +23,7 @@ import tab_version
 import version_info
 from __version__ import __version__
 
-from config_manager import load_config, save_config
+from config_manager import load_config, save_config, get_allowed_paths
 
 os.makedirs("downloads", exist_ok=True)
 cfg = load_config()
@@ -232,8 +232,14 @@ if __name__ =="__main__":
     print(f"[System] 啟動於 http://127.0.0.1:{port}")
     # 注意:filmstrip 的 JS 不能用 gr.HTML() 注入(innerHTML 插入的 <script>
     # 瀏覽器天生不會執行),要放進真正的 <head> 才會跑,所以在這裡集中傳入。
+    # 資料集若不在工具目錄底下(例如 E:\訓練\、E:\ppe\),Gradio 預設會擋掉
+    # 那些路徑的圖片存取,所以要把 config 裡的 allowed_paths 一併傳入。
+    allowed_paths = get_allowed_paths(cfg)
+    if allowed_paths:
+        print(f"[System] 已允許存取以下額外路徑:{allowed_paths}")
     demo.launch(
         inbrowser=True, server_name="127.0.0.1", server_port=port,
         head=tab_extractor.FILMSTRIP_HEAD_JS + gallery_scroll.GALLERY_SCROLL_HEAD_JS,
         show_error=True,  # 未預期例外要把訊息(含版本資訊,見上面的 monkeypatch)顯示給使用者
+        allowed_paths=allowed_paths,
     )

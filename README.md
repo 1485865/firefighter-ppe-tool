@@ -20,6 +20,16 @@
 3. **設定檔**:第一次啟動時,程式會自動把 `config.example.json` 複製成 `config.local.json`(這個檔案不進版控,存你自己的 Roboflow API Key/Workspace/Project,在網頁上方「Roboflow API 設定」填好按儲存就會寫進這個檔案)。
 4. **模型權重**:`models/*.pt` 跟根目錄的 `yolo11n.pt`/`yolo11x.pt`/`yolo26n.pt` **沒有進版控**(`.gitignore` 排除了所有 `*.pt`,避免大型二進位檔案塞爆 repo)。請跟團隊拿這些檔案,放進 `models/` 資料夾(根目錄的幾個 `.pt` 底模是 ultralytics 官方預訓練檔,沒有也會在第一次用到時自動下載,只是需要網路)。
 5. **ffmpeg**:`bin/*.exe` 也沒有進版控。程式開啟時會自動檢查(先找系統 PATH,再找 `bin/`),兩個都沒有就自動從網路下載到 `bin/`(過程有進度顯示)。下載失敗會在頁面上顯示明確訊息,告訴你去哪裡手動下載安裝,不會擋住程式其他功能正常使用。
+6. **資料集不在工具目錄底下時**:Gradio 預設只允許顯示工作目錄以內的圖片,如果你的資料集放在別的磁碟位置(例如 `E:\訓練\`、`E:\ppe\`),抽樣比對、漏標預覽等需要顯示圖片的功能會被擋下,出現「Cannot move ... to the gradio cache dir」的錯誤。這時要在 `config.local.json` 加入 `allowed_paths`,列出要允許存取的資料夾(可以放多個,路徑用 `\\` 跳脫或直接用 `/`):
+   ```json
+   {
+     "api_key": "",
+     "workspace": "",
+     "project": "",
+     "allowed_paths": ["E:\\訓練", "E:\\ppe"]
+   }
+   ```
+   路徑不存在或設成整個磁碟機根目錄(例如 `E:\`)會被自動略過並在終端機印警告,不會讓程式啟動失敗——但也因此**不能**用來一次開放整顆磁碟,請明確列出實際的資料夾。改完 `config.local.json` 後需要重新啟動程式才會生效。
 
 ## 環境變數
 

@@ -1,1 +1,9 @@
-{"api_key": "", "workspace": "", "project": ""}
+{
+  "api_key": "",
+  "workspace": "",
+  "project": "",
+  "allowed_paths": [
+    "E:\\訓練",
+    "E:\\ppe"
+  ]
+}
