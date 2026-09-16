@@ -70,12 +70,35 @@ def export_anomaly(anomaly_paths):
     return out_path
 
 
-def export_excel(result):
+def export_excel(result, embed_limit, batch_export, progress=gr.Progress()):
     if not result:
-        return None
-    out_path = os.path.join(TEMP_DIR, f"audit_{time.strftime('%Y%m%d_%H%M%S')}.xlsx")
-    aee.export_excel(result, out_path)
-    return out_path
+        return None, "請先執行稽核。"
+
+    embed_limit = int(embed_limit) if embed_limit else aee.DEFAULT_EMBED_LIMIT
+    base_name = os.path.join(TEMP_DIR, f"audit_{time.strftime('%Y%m%d_%H%M%S')}")
+
+    def cb(frac, desc=""):
+        progress(frac, desc=desc)
+
+    if batch_export:
+        stats = aee.export_excel_batches(result, TEMP_DIR, base_name,
+                                         embed_limit=embed_limit, progress_cb=cb)
+        msg = (
+            f"已分成 {stats['batch_count']} 個批次(每批最多 200 筆),打包成 zip。\n"
+            f"漏標清單縮圖:嵌入 {stats['missing_embedded']} 張,讀取失敗 {stats['missing_failed']} 張\n"
+            f"異常框清單縮圖:嵌入 {stats['anomaly_embedded']} 張,讀取失敗 {stats['anomaly_failed']} 張\n"
+            f"檔案大小:{stats['file_size'] / 1024 / 1024:.2f} MB"
+        )
+    else:
+        out_path = base_name + ".xlsx"
+        stats = aee.export_excel(result, out_path, embed_limit=embed_limit, progress_cb=cb)
+        msg = (
+            f"漏標清單縮圖:嵌入 {stats['missing_embedded']} 張,讀取失敗 {stats['missing_failed']} 張\n"
+            f"異常框清單縮圖:嵌入 {stats['anomaly_embedded']} 張,讀取失敗 {stats['anomaly_failed']} 張\n"
+            f"檔案大小:{stats['file_size'] / 1024 / 1024:.2f} MB"
+        )
+
+    return stats["path"], msg
 
 
 def run_sample(folder, cls_name, n):
@@ -100,7 +123,14 @@ def render_ui():
     with gr.Tabs():
         with gr.TabItem("總覽"):
             summary_txt = gr.Textbox(label="稽核摘要", lines=8)
+            with gr.Row():
+                embed_limit_input = gr.Number(
+                    value=aee.DEFAULT_EMBED_LIMIT, precision=0, minimum=0,
+                    label="匯出筆數上限(每個清單最多嵌幾張縮圖,依嚴重度取前 N 筆)")
+                batch_export_checkbox = gr.Checkbox(
+                    value=False, label="分批匯出(每 200 筆一個檔案,打包成 zip,方便分給不同人審)")
             export_excel_btn = gr.Button("匯出 Excel", variant="primary")
+            export_excel_status = gr.Textbox(label="匯出結果", lines=4, interactive=False)
             export_excel_file = gr.File(label="下載 Excel 報表")
 
         with gr.TabItem("漏標清單"):
@@ -145,8 +175,9 @@ def render_ui():
                              outputs=[export_missing_file])
     export_anomaly_btn.click(fn=export_anomaly, inputs=[anomaly_paths_state],
                              outputs=[export_anomaly_file])
-    export_excel_btn.click(fn=export_excel, inputs=[audit_result_state],
-                           outputs=[export_excel_file])
+    export_excel_btn.click(fn=export_excel,
+                           inputs=[audit_result_state, embed_limit_input, batch_export_checkbox],
+                           outputs=[export_excel_file, export_excel_status])
 
     sample_btn.click(fn=run_sample, inputs=[folder_input, sample_cls_dd, sample_n_slider],
                      outputs=[sample_gallery])

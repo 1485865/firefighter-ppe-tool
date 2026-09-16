@@ -149,6 +149,7 @@ def audit_dataset(folder, area_max_pct=60.0, area_min_pct=0.1,
                     "heads": head_count, "expected_heads": expected_heads,
                     "head_gap": head_gap,
                     "gap": max(hand_gap, 0) + max(head_gap, 0),
+                    "boxes": list(boxes),  # 供 Excel 匯出縮圖畫框用
                 })
 
             per_image_counts.append(len(boxes))

@@ -13,5 +13,6 @@ plyer
 pandas
 matplotlib
 openpyxl
+Pillow
 PySide6
 pyinstaller
