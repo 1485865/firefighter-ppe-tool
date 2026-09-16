@@ -3,6 +3,7 @@
 三個工作表:漏標清單 / 異常框清單 / 統計摘要。
 """
 import os
+import re
 import statistics
 from urllib.request import pathname2url
 
@@ -13,6 +14,34 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 VERDICT_CHOICES = ["確認漏標", "誤報", "已修正", "待確認"]
+
+# Roboflow 匯出檔名長這樣:frame_0053_jpg.rf.a7f198190a9803eb0641f0658d622f8d.jpg
+# 這個雜湊檔名在 Roboflow 後台搜尋框打不到,要還原成 frame_0053.jpg 才找得到。
+_ROBOFLOW_HASH_RE = re.compile(r"\.rf\.[a-f0-9]+\.(jpg|jpeg|png)$", re.IGNORECASE)
+_EXT_UNDERSCORE_MAP = [("_jpg", ".jpg"), ("_jpeg", ".jpeg"), ("_png", ".png")]
+
+DUPLICATE_NAME_NOTE = (
+    "⚠️ 「Roboflow 搜尋用檔名」/「搜尋關鍵字」只是把雜湊檔名還原成好搜尋的樣子,"
+    "frame_XXXX 這種編號在不同來源影片間可能重複,搜尋結果可能不只一張,"
+    "務必再對照「完整路徑」欄開圖確認是不是同一張。"
+)
+
+
+def roboflow_display_name(filename):
+    """把 Roboflow 匯出檔名還原成後台搜尋得到的原始檔名,不符合 pattern 就原樣回傳。"""
+    m = _ROBOFLOW_HASH_RE.search(filename)
+    if not m:
+        return filename
+    trimmed = filename[:m.start()]
+    for suffix, ext in _EXT_UNDERSCORE_MAP:
+        if trimmed.lower().endswith(suffix):
+            return trimmed[:-len(suffix)] + ext
+    return trimmed + "." + m.group(1).lower()
+
+
+def roboflow_search_keyword(display_name):
+    """回傳不含副檔名的主檔名,當作 Roboflow 搜尋框的關鍵字(子字串比對,越短命中率越高)。"""
+    return os.path.splitext(display_name)[0]
 
 # 異常原因上色:跟 audit_core.ANOMALY_CATEGORIES 對應,額外情況(如標註格式
 # 錯誤)沒列在這裡的話會退回灰色,不影響匯出。
@@ -39,20 +68,29 @@ def _image_to_file_url(path):
         return None
 
 
-def _style_header(ws, n_cols):
+def _write_note_row(ws, n_cols, text):
+    """在第 1 列寫一行提醒(合併整列),資料表的表頭跟著往下移到第 2 列。"""
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+    cell = ws.cell(row=1, column=1, value=text)
+    cell.font = Font(italic=True, color="9C5700")
+    cell.fill = PatternFill("solid", fgColor="FFF2CC")
+    ws.row_dimensions[1].height = 30
+
+
+def _style_header(ws, n_cols, header_row):
     for col in range(1, n_cols + 1):
-        cell = ws.cell(row=1, column=col)
+        cell = ws.cell(row=header_row, column=col)
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:{get_column_letter(n_cols)}1"
+    ws.freeze_panes = f"A{header_row + 1}"
+    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(n_cols)}{header_row}"
 
 
-def _autosize_columns(ws, n_cols, n_rows, sample_rows=200):
+def _autosize_columns(ws, n_cols, n_rows, header_row, sample_rows=200):
     """用前面幾百列估欄寬,避免 2000+ 列時逐列量測拖慢速度。"""
     widths = [0] * (n_cols + 1)
     check_rows = min(n_rows, sample_rows)
-    for row in range(1, check_rows + 2):  # +1 涵蓋標題列
+    for row in range(header_row, header_row + check_rows + 1):  # +1 涵蓋標題列
         for col in range(1, n_cols + 1):
             value = ws.cell(row=row, column=col).value
             if value is None:
@@ -65,7 +103,7 @@ def _autosize_columns(ws, n_cols, n_rows, sample_rows=200):
             MAX_COL_WIDTH, max(10, widths[col] + 2))
 
 
-def _add_verdict_validation(ws, col_idx, n_rows):
+def _add_verdict_validation(ws, col_idx, n_rows, header_row):
     if n_rows <= 0:
         return
     dv = DataValidation(
@@ -75,19 +113,24 @@ def _add_verdict_validation(ws, col_idx, n_rows):
     )
     ws.add_data_validation(dv)
     col_letter = get_column_letter(col_idx)
-    dv.add(f"{col_letter}2:{col_letter}{n_rows + 1}")
+    dv.add(f"{col_letter}{header_row + 1}:{col_letter}{header_row + n_rows}")
 
 
 def _write_missing_sheet(wb, missing_labels):
     ws = wb.create_sheet("漏標清單")
-    headers = ["檔名", "完整路徑", "person 框數", "手部框數", "手部預期數",
+    headers = ["檔名", "Roboflow 搜尋用檔名", "搜尋關鍵字", "完整路徑",
+               "person 框數", "手部框數", "手部預期數",
                "手部缺口", "頭部框數", "頭部缺口", "嚴重度", "判定", "備註"]
+    _write_note_row(ws, len(headers), DUPLICATE_NAME_NOTE)
     ws.append(headers)
 
     for r in missing_labels:
+        basename = os.path.basename(r["image"])
+        display_name = roboflow_display_name(basename)
+        keyword = roboflow_search_keyword(display_name)
         full_path = os.path.abspath(r["image"])
         row = [
-            os.path.basename(r["image"]), full_path, r["person"], r["hands"],
+            basename, display_name, keyword, full_path, r["person"], r["hands"],
             r["expected_hands"], r["hand_gap"], r["heads"], r["head_gap"],
             r["gap"], "", "",
         ]
@@ -100,8 +143,9 @@ def _write_missing_sheet(wb, missing_labels):
             cell.font = HYPERLINK_FONT
 
     n_rows = len(missing_labels)
-    _style_header(ws, len(headers))
-    _add_verdict_validation(ws, headers.index("判定") + 1, n_rows)
+    header_row = 2
+    _style_header(ws, len(headers), header_row)
+    _add_verdict_validation(ws, headers.index("判定") + 1, n_rows, header_row)
 
     if n_rows > 0:
         severity_col = headers.index("嚴重度") + 1
@@ -111,19 +155,24 @@ def _write_missing_sheet(wb, missing_labels):
             mid_type="percentile", mid_value=50, mid_color="FFEB84",
             end_type="max", end_color="F8696B",
         )
-        ws.conditional_formatting.add(f"{col_letter}2:{col_letter}{n_rows + 1}", rule)
+        ws.conditional_formatting.add(
+            f"{col_letter}{header_row + 1}:{col_letter}{header_row + n_rows}", rule)
 
-    _autosize_columns(ws, len(headers), n_rows)
+    _autosize_columns(ws, len(headers), n_rows, header_row)
     return ws
 
 
 def _write_anomaly_sheet(wb, anomaly_boxes):
     ws = wb.create_sheet("異常框清單")
-    headers = ["檔名", "完整路徑", "類別", "異常原因", "框座標(cx,cy,w,h)",
-               "框面積佔比(%)", "長寬比", "判定"]
+    headers = ["檔名", "Roboflow 搜尋用檔名", "搜尋關鍵字", "完整路徑", "類別",
+               "異常原因", "框座標(cx,cy,w,h)", "框面積佔比(%)", "長寬比", "判定"]
+    _write_note_row(ws, len(headers), DUPLICATE_NAME_NOTE)
     ws.append(headers)
 
     for a in anomaly_boxes:
+        basename = os.path.basename(a["image"])
+        display_name = roboflow_display_name(basename)
+        keyword = roboflow_search_keyword(display_name)
         full_path = os.path.abspath(a["image"])
         if a["cx"] is not None:
             coord = f"({a['cx']:.4f}, {a['cy']:.4f}, {a['w']:.4f}, {a['h']:.4f})"
@@ -132,7 +181,7 @@ def _write_anomaly_sheet(wb, anomaly_boxes):
         area_pct = round(a["area_pct"], 3) if a["area_pct"] is not None else ""
         ar = round(a["aspect_ratio"], 3) if a["aspect_ratio"] is not None else ""
         row = [
-            os.path.basename(a["image"]), full_path, a["cls_name"] or "",
+            basename, display_name, keyword, full_path, a["cls_name"] or "",
             a["category"], coord, area_pct, ar, "",
         ]
         ws.append(row)
@@ -149,9 +198,10 @@ def _write_anomaly_sheet(wb, anomaly_boxes):
         reason_cell.fill = PatternFill("solid", fgColor=color)
 
     n_rows = len(anomaly_boxes)
-    _style_header(ws, len(headers))
-    _add_verdict_validation(ws, headers.index("判定") + 1, n_rows)
-    _autosize_columns(ws, len(headers), n_rows)
+    header_row = 2
+    _style_header(ws, len(headers), header_row)
+    _add_verdict_validation(ws, headers.index("判定") + 1, n_rows, header_row)
+    _autosize_columns(ws, len(headers), n_rows, header_row)
     return ws
 
 
@@ -165,6 +215,13 @@ def _write_summary_sheet(wb, result):
     missing_pct = (n_missing / total_images * 100.0) if total_images else 0.0
 
     row = 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+    note_cell = ws.cell(row=row, column=1, value=DUPLICATE_NAME_NOTE)
+    note_cell.font = Font(italic=True, color="9C5700")
+    note_cell.fill = PatternFill("solid", fgColor="FFF2CC")
+    ws.row_dimensions[row].height = 30
+    row += 2
+
     ws.cell(row=row, column=1, value="總圖數").font = Font(bold=True)
     ws.cell(row=row, column=2, value=total_images)
     row += 1
